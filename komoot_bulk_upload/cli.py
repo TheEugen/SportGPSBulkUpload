@@ -10,11 +10,11 @@ import time
 from . import __version__
 from .api import (
     KomootClient, KomootError, KomootAuthError, PRIVACY, SPORTS,
-    DATA_TYPES, data_type_for,
+    DATA_TYPES, data_type_for, german_activity_name,
 )
 from .payload import upload_payload, UnsupportedFormat
-from .gpx import read_metadata, title_for
-from .state import UploadState, file_hash
+from .gpx import read_metadata
+from .state import UploadState, file_hash, activity_key
 
 # File extensions we can upload (matches api.DATA_TYPES keys).
 SUPPORTED_EXTS = tuple("." + ext for ext in DATA_TYPES)
@@ -45,6 +45,11 @@ def build_parser():
     p.add_argument(
         "--sport", default="touringbicycle",
         help="komoot sport id for every tour (default: touringbicycle).",
+    )
+    p.add_argument(
+        "--name",
+        help="Tour name for every upload (default: the German activity name "
+             "for --sport, e.g. 'Fahrradtour').",
     )
     p.add_argument(
         "--status", default="private", choices=PRIVACY,
@@ -128,10 +133,11 @@ def main(argv=None):
     print("Found {} activity file(s).".format(len(files)))
 
     if args.dry_run:
+        title = args.name or german_activity_name(args.sport)
         for f in files:
-            name, elapsed = read_metadata(f)
+            _, elapsed = read_metadata(f)
             print("  would upload: {!r}  (type={}, name={!r}, elapsed={}s)".format(
-                os.path.basename(f), data_type_for(f), name or "<filename>", elapsed))
+                os.path.basename(f), data_type_for(f), title, elapsed))
         return 0
 
     email, password, token = resolve_credentials(args)
@@ -148,22 +154,28 @@ def main(argv=None):
         return 1
 
     state = UploadState(args.state_file)
+    done_keys = state.done_activity_keys()
+    title = args.name or german_activity_name(args.sport)
     counts = {"created": 0, "duplicate": 0, "skipped": 0, "failed": 0}
     total = len(files)
 
     for i, path in enumerate(files, 1):
         prefix = "[{}/{}] {}".format(i, total, os.path.basename(path))
         digest = file_hash(path)
+        akey = activity_key(path)
 
         if not args.force and state.is_done(digest):
             print(prefix + " -> skipped (already uploaded)")
             counts["skipped"] += 1
             continue
+        if not args.force and akey in done_keys:
+            print(prefix + " -> skipped (same activity already uploaded)")
+            counts["skipped"] += 1
+            continue
 
-        name, elapsed = read_metadata(path)
-        title = name or title_for(path)
+        _, elapsed = read_metadata(path)
         try:
-            data, dtype = upload_payload(path)  # TCX is converted to GPX here
+            data, dtype = upload_payload(path)
         except UnsupportedFormat as e:
             print(prefix + " -> FAILED: {}".format(e))
             counts["failed"] += 1
@@ -177,14 +189,16 @@ def main(argv=None):
         except KomootError as e:
             print(prefix + " -> FAILED: {}".format(e))
             counts["failed"] += 1
-            state.record(digest, status="failed", file=path, name=title, error=str(e))
+            state.record(digest, status="failed", file=path, name=title,
+                         activity_key=akey, error=str(e))
             continue
 
         counts[result.status] += 1
         print(prefix + " -> {}{}".format(
             result.status, " (id " + str(result.tour_id) + ")" if result.tour_id else ""))
         state.record(digest, status=result.status, file=path, name=title,
-                     tour_id=result.tour_id)
+                     activity_key=akey, tour_id=result.tour_id)
+        done_keys.add(akey)
 
         if i < total and args.delay > 0:
             time.sleep(args.delay)
