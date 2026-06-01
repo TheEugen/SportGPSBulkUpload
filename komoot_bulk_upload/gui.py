@@ -23,6 +23,7 @@ from .api import (
     data_type_for,
 )
 from .cli import collect_files
+from .convert import upload_payload, UnsupportedFormat
 from .gpx import read_metadata, title_for
 from .state import UploadState, file_hash
 
@@ -249,11 +250,17 @@ class KomootUploaderGUI:
                 name, elapsed = read_metadata(path)
                 title = name or title_for(path)
                 try:
-                    with open(path, "rb") as fh:
-                        data = fh.read()
+                    data, dtype = upload_payload(path)  # TCX -> GPX here
+                except UnsupportedFormat as e:
+                    counts["failed"] += 1
+                    self.events.put(
+                        ("progress", i, total,
+                         "[{}/{}] {} -> FAILED: {}".format(i, total, base, e)))
+                    continue
+                try:
                     result = self.client.upload_tour(
                         data, name=title, sport=sport,
-                        data_type=data_type_for(path), status=status)
+                        data_type=dtype, status=status)
                 except KomootError as e:
                     counts["failed"] += 1
                     state.record(digest, status="failed", file=path,

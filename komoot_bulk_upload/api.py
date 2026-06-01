@@ -28,13 +28,10 @@ SPORTS = (
 
 PRIVACY = ("private", "friends", "public")
 
-# Activity formats komoot accepts on import, mapped to the API `data_type`
-# value and the request Content-Type. GPX and TCX are XML; FIT is binary.
-DATA_TYPES = {
-    "gpx": ("gpx", "application/xml"),
-    "tcx": ("tcx", "application/xml"),
-    "fit": ("fit", "application/octet-stream"),
-}
+# File formats komoot's importer recognizes. In practice only GPX is POSTed to
+# the API (TCX/FIT are converted to GPX first — see convert.py); the value is
+# passed through as the `data_type` query param.
+DATA_TYPES = ("gpx", "tcx", "fit")
 
 
 def data_type_for(path):
@@ -76,7 +73,7 @@ class KomootClient:
         self.token = token
         self.username = None
         self.session = requests.Session()
-        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.2"
+        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.3"
         # When a token is supplied we can authenticate directly.
         self.auth = HTTPBasicAuth(email, token) if token else None
 
@@ -105,20 +102,20 @@ class KomootClient:
 
     def upload_tour(self, data, name, sport, data_type="gpx", status="private",
                     time_in_motion=None):
-        """Upload one activity file (gpx/tcx/fit).
+        """Upload one activity. `data` is the raw GPX bytes.
 
-        Returns an UploadResult or raises KomootError. `data` is the raw file
-        bytes; `data_type` selects the komoot format and request Content-Type.
+        Returns an UploadResult or raises KomootError. NOTE: the body is sent
+        with NO Content-Type header on purpose — komoot's backend reads the raw
+        GPX bytes, and declaring a content type (e.g. application/xml) makes it
+        try to deserialize the body and fail with HTTP 400 HttpMessageNotReadable.
         """
         if self.auth is None:
             self.signin()
 
-        try:
-            komoot_type, content_type = DATA_TYPES[data_type]
-        except KeyError:
+        if data_type not in DATA_TYPES:
             raise KomootError("Unsupported data_type: {!r}".format(data_type))
 
-        params = {"data_type": komoot_type, "sport": sport, "name": name,
+        params = {"data_type": data_type, "sport": sport, "name": name,
                   "status": status}
         if time_in_motion:
             params["time_in_motion"] = int(time_in_motion)
@@ -128,7 +125,6 @@ class KomootClient:
             params=params,
             data=data,
             auth=self.auth,
-            headers={"Content-Type": content_type},
         )
 
         if resp.status_code == 201:

@@ -20,19 +20,24 @@ def _localname(tag):
 def read_metadata(path):
     """Return (name, elapsed_seconds) for an activity file.
 
-    For GPX/TCX, `name` is the first <name>/<Name> found, or None, and
-    `elapsed_seconds` is max-min of all <time>/<Time> values, or None when
-    unknown. Binary formats (FIT) and malformed files yield (None, None).
+    `name` is the first GPX <name> found, or None — TCX is skipped for naming
+    because its <Name> elements hold the device/creator (e.g. "ROX GPS 11.0"),
+    not a tour title, so those files fall back to the filename. `elapsed_seconds`
+    is max-min of all <time>/<Time> values (read from GPX and TCX alike), or None
+    when unknown. Binary formats (FIT) and malformed files yield (None, None).
     """
-    if os.path.splitext(path)[1].lower() not in XML_EXTS:
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in XML_EXTS:
         return None, None
+    read_name = ext == ".gpx"
 
     name = None
     timestamps = []
     try:
         for _, elem in ET.iterparse(path, events=("end",)):
             tag = _localname(elem.tag).lower()
-            if tag == "name" and name is None and elem.text and elem.text.strip():
+            if (read_name and tag == "name" and name is None
+                    and elem.text and elem.text.strip()):
                 name = elem.text.strip()
             elif tag == "time" and elem.text and elem.text.strip():
                 dt = _parse_iso(elem.text.strip())
