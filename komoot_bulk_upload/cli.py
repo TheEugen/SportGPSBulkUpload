@@ -31,8 +31,12 @@ def build_parser():
         ),
     )
     p.add_argument(
-        "paths", nargs="+",
+        "paths", nargs="*",
         help="GPX/TCX/FIT files and/or directories to upload.",
+    )
+    p.add_argument(
+        "--gui", action="store_true",
+        help="Launch the graphical interface instead of uploading from the CLI.",
     )
     p.add_argument("--email", help="komoot account email.")
     p.add_argument("--password", help="komoot password (prefer the prompt/env var).")
@@ -106,6 +110,15 @@ def resolve_credentials(args):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+
+    if args.gui:
+        from .gui import run
+        return run(args)
+
+    if not args.paths:
+        print("No paths given. Pass files/directories, or use --gui.",
+              file=sys.stderr)
+        return 2
 
     files = collect_files(args.paths)
     if not files:

@@ -1,0 +1,328 @@
+"""A minimal tkinter GUI for bulk-uploading activities to komoot.
+
+Wraps the same backend used by the CLI (``api`` / ``gpx`` / ``state``):
+
+- shows whether the program is signed in (LoggedIn / NotLoggedIn),
+- lets the user pick a directory and a file format to upload, and
+- drives a progress bar while uploading.
+
+Network work (sign-in, uploads) runs on a worker thread; the worker posts
+events onto a queue that the Tk main loop drains, so the UI stays responsive
+and all widget updates happen on the main thread.
+"""
+
+import os
+import queue
+import threading
+import time
+import tkinter as tk
+from tkinter import ttk, filedialog
+
+from .api import (
+    KomootClient, KomootError, KomootAuthError, PRIVACY, SPORTS, DATA_TYPES,
+    data_type_for,
+)
+from .cli import collect_files
+from .gpx import read_metadata, title_for
+from .state import UploadState, file_hash
+
+# Format choices for the dropdown: "all" plus each supported extension.
+FORMAT_CHOICES = ("all",) + tuple(DATA_TYPES)
+
+
+class KomootUploaderGUI:
+    def __init__(self, root, default_sport="touringbicycle",
+                 default_status="private", delay=2.0,
+                 state_file="komoot_upload_state.json"):
+        self.root = root
+        self.delay = delay
+        self.state_file = state_file
+
+        self.client = None          # set once sign-in succeeds
+        self.username = None
+        self.events = queue.Queue()  # worker -> main-thread messages
+        self.uploading = False
+
+        root.title("Sport GPS Bulk Upload to komoot")
+        root.minsize(560, 460)
+
+        self._build_credentials()
+        self._build_source(default_sport, default_status)
+        self._build_progress()
+        self._build_log()
+
+        # Pre-fill from environment, if present, as a convenience.
+        self.email_var.set(os.environ.get("KOMOOT_EMAIL", ""))
+        self.password_var.set(os.environ.get("KOMOOT_PASSWORD", ""))
+
+        self._refresh_login_status()
+        self._refresh_summary()
+        self.root.after(100, self._drain_events)
+
+    # --- UI construction -------------------------------------------------
+
+    def _build_credentials(self):
+        f = ttk.LabelFrame(self.root, text="komoot account", padding=10)
+        f.pack(fill="x", padx=10, pady=(10, 5))
+        f.columnconfigure(1, weight=1)
+
+        ttk.Label(f, text="Email:").grid(row=0, column=0, sticky="w")
+        self.email_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.email_var).grid(
+            row=0, column=1, sticky="ew", padx=5)
+
+        ttk.Label(f, text="Password:").grid(row=1, column=0, sticky="w", pady=(5, 0))
+        self.password_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.password_var, show="•").grid(
+            row=1, column=1, sticky="ew", padx=5, pady=(5, 0))
+
+        self.signin_btn = ttk.Button(f, text="Sign in", command=self._on_signin)
+        self.signin_btn.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(5, 0))
+
+        self.login_var = tk.StringVar()
+        self.login_label = ttk.Label(f, textvariable=self.login_var)
+        self.login_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def _build_source(self, default_sport, default_status):
+        f = ttk.LabelFrame(self.root, text="Activities to upload", padding=10)
+        f.pack(fill="x", padx=10, pady=5)
+        f.columnconfigure(1, weight=1)
+
+        ttk.Label(f, text="Directory:").grid(row=0, column=0, sticky="w")
+        self.dir_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.dir_var, state="readonly").grid(
+            row=0, column=1, sticky="ew", padx=5)
+        ttk.Button(f, text="Browse…", command=self._on_browse).grid(
+            row=0, column=2)
+
+        ttk.Label(f, text="Format:").grid(row=1, column=0, sticky="w", pady=(5, 0))
+        self.format_var = tk.StringVar(value="all")
+        fmt = ttk.Combobox(f, textvariable=self.format_var, values=FORMAT_CHOICES,
+                           state="readonly", width=10)
+        fmt.grid(row=1, column=1, sticky="w", padx=5, pady=(5, 0))
+        fmt.bind("<<ComboboxSelected>>", lambda _e: self._refresh_summary())
+
+        ttk.Label(f, text="Sport:").grid(row=2, column=0, sticky="w", pady=(5, 0))
+        self.sport_var = tk.StringVar(value=default_sport)
+        ttk.Combobox(f, textvariable=self.sport_var, values=SPORTS,
+                     width=18).grid(row=2, column=1, sticky="w", padx=5, pady=(5, 0))
+
+        ttk.Label(f, text="Privacy:").grid(row=3, column=0, sticky="w", pady=(5, 0))
+        self.status_var = tk.StringVar(value=default_status)
+        ttk.Combobox(f, textvariable=self.status_var, values=PRIVACY,
+                     state="readonly", width=10).grid(
+            row=3, column=1, sticky="w", padx=5, pady=(5, 0))
+
+        self.summary_var = tk.StringVar()
+        ttk.Label(f, textvariable=self.summary_var, foreground="#555").grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def _build_progress(self):
+        f = ttk.Frame(self.root, padding=(10, 5))
+        f.pack(fill="x")
+        f.columnconfigure(0, weight=1)
+
+        self.progress = ttk.Progressbar(f, mode="determinate", maximum=100)
+        self.progress.grid(row=0, column=0, sticky="ew")
+
+        self.progress_var = tk.StringVar(value="Idle")
+        ttk.Label(f, textvariable=self.progress_var).grid(
+            row=0, column=1, padx=(8, 0))
+
+        self.upload_btn = ttk.Button(f, text="Upload", command=self._on_upload)
+        self.upload_btn.grid(row=0, column=2, padx=(8, 0))
+
+    def _build_log(self):
+        f = ttk.LabelFrame(self.root, text="Log", padding=5)
+        f.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+        self.log = tk.Text(f, height=10, wrap="word", state="disabled")
+        scroll = ttk.Scrollbar(f, command=self.log.yview)
+        self.log.configure(yscrollcommand=scroll.set)
+        self.log.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+    # --- helpers ---------------------------------------------------------
+
+    def _log(self, text):
+        self.log.configure(state="normal")
+        self.log.insert("end", text + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def _refresh_login_status(self):
+        if self.client is not None:
+            who = " as user " + str(self.username) if self.username else ""
+            self.login_var.set("● LoggedIn" + who)
+            self.login_label.configure(foreground="#1a7f37")  # green
+        else:
+            self.login_var.set("● NotLoggedIn")
+            self.login_label.configure(foreground="#cf222e")  # red
+
+    def _matching_files(self):
+        directory = self.dir_var.get()
+        if not directory:
+            return []
+        files = collect_files([directory])
+        fmt = self.format_var.get()
+        if fmt != "all":
+            files = [f for f in files if data_type_for(f) == fmt]
+        return files
+
+    def _refresh_summary(self):
+        directory = self.dir_var.get() or "(none selected)"
+        fmt = self.format_var.get()
+        count = len(self._matching_files()) if self.dir_var.get() else 0
+        self.summary_var.set(
+            "Directory: {}   |   Format: {}   |   {} file(s)".format(
+                directory, fmt, count))
+
+    def _set_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        self.signin_btn.configure(state=state)
+        self.upload_btn.configure(state=state)
+
+    # --- event handlers --------------------------------------------------
+
+    def _on_browse(self):
+        directory = filedialog.askdirectory(title="Choose a folder of activities")
+        if directory:
+            self.dir_var.set(directory)
+            self._refresh_summary()
+
+    def _on_signin(self):
+        email = self.email_var.get().strip()
+        password = self.password_var.get()
+        if not email or not password:
+            self._log("Enter both an email and a password to sign in.")
+            return
+        self._set_busy(True)
+        self.progress_var.set("Signing in…")
+        self._log("Signing in as {}…".format(email))
+
+        def work():
+            try:
+                client = KomootClient(email, password=password)
+                username = client.signin()
+                self.events.put(("signin_ok", client, username))
+            except KomootAuthError as e:
+                self.events.put(("signin_err", str(e)))
+            except KomootError as e:
+                self.events.put(("signin_err", str(e)))
+            except Exception as e:  # network/other
+                self.events.put(("signin_err", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_upload(self):
+        if self.uploading:
+            return
+        if self.client is None:
+            self._log("Sign in before uploading.")
+            return
+        files = self._matching_files()
+        if not files:
+            self._log("No matching files in the selected directory.")
+            return
+
+        self.uploading = True
+        self._set_busy(True)
+        self.progress.configure(maximum=len(files), value=0)
+        self.progress_var.set("0 / {}".format(len(files)))
+        self._log("Uploading {} file(s)…".format(len(files)))
+
+        sport = self.sport_var.get().strip()
+        status = self.status_var.get()
+        state = UploadState(self.state_file)
+
+        def work():
+            counts = {"created": 0, "duplicate": 0, "skipped": 0, "failed": 0}
+            total = len(files)
+            for i, path in enumerate(files, 1):
+                base = os.path.basename(path)
+                digest = file_hash(path)
+                if state.is_done(digest):
+                    counts["skipped"] += 1
+                    self.events.put(
+                        ("progress", i, total,
+                         "[{}/{}] {} -> skipped".format(i, total, base)))
+                    continue
+                name, elapsed = read_metadata(path)
+                title = name or title_for(path)
+                try:
+                    with open(path, "rb") as fh:
+                        data = fh.read()
+                    result = self.client.upload_tour(
+                        data, name=title, sport=sport,
+                        data_type=data_type_for(path), status=status)
+                except KomootError as e:
+                    counts["failed"] += 1
+                    state.record(digest, status="failed", file=path,
+                                 name=title, error=str(e))
+                    self.events.put(
+                        ("progress", i, total,
+                         "[{}/{}] {} -> FAILED: {}".format(i, total, base, e)))
+                    continue
+                counts[result.status] += 1
+                state.record(digest, status=result.status, file=path,
+                             name=title, tour_id=result.tour_id)
+                self.events.put(
+                    ("progress", i, total,
+                     "[{}/{}] {} -> {}".format(i, total, base, result.status)))
+                if i < total and self.delay > 0:
+                    time.sleep(self.delay)
+            self.events.put(("done", counts))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- main-thread event pump -----------------------------------------
+
+    def _drain_events(self):
+        try:
+            while True:
+                event = self.events.get_nowait()
+                kind = event[0]
+                if kind == "signin_ok":
+                    _, self.client, self.username = event
+                    self._refresh_login_status()
+                    self._log("Signed in.")
+                    self.progress_var.set("Idle")
+                    self._set_busy(False)
+                elif kind == "signin_err":
+                    self._log("Sign-in failed: {}".format(event[1]))
+                    self.progress_var.set("Idle")
+                    self._set_busy(False)
+                elif kind == "progress":
+                    _, i, total, msg = event
+                    self.progress.configure(value=i)
+                    self.progress_var.set("{} / {}".format(i, total))
+                    self._log(msg)
+                elif kind == "done":
+                    counts = event[1]
+                    self.uploading = False
+                    self._set_busy(False)
+                    self.progress_var.set("Done")
+                    self._log("Done. created={created} duplicate={duplicate} "
+                              "skipped={skipped} failed={failed}".format(**counts))
+        except queue.Empty:
+            pass
+        self.root.after(100, self._drain_events)
+
+
+def run(args=None):
+    """Launch the GUI. `args` may carry CLI defaults (sport/status/delay/...)."""
+    root = tk.Tk()
+    kwargs = {}
+    if args is not None:
+        kwargs = dict(
+            default_sport=getattr(args, "sport", "touringbicycle"),
+            default_status=getattr(args, "status", "private"),
+            delay=getattr(args, "delay", 2.0),
+            state_file=getattr(args, "state_file", "komoot_upload_state.json"),
+        )
+    KomootUploaderGUI(root, **kwargs)
+    root.mainloop()
+    return 0
+
+
+if __name__ == "__main__":
+    run()
