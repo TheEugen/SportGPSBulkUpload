@@ -8,8 +8,9 @@ dist/
 .venv/
 venv/
 
-# Resume state written at runtime
+# Resume state + run log written at runtime
 komoot_upload_state.json
+komoot_upload_log.txt
 *.json.tmp
 
 # Local Claude Code settings (machine-specific)

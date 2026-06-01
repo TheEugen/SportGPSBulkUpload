@@ -72,6 +72,8 @@ This writes two single-file executables to `dist\`:
 | `--derive-time` | off | Send elapsed time (from GPX timestamps) as `time_in_motion`. |
 | `--delay` | `2.0` | Seconds between uploads, to be gentle on the API. |
 | `--state-file` | `komoot_upload_state.json` | Resume file; skips already-uploaded GPX. |
+| `--log-file` | `komoot_upload_log.txt` | Plaintext log of each upload, written to the working directory. |
+| `--no-log` | off | Don't write the plaintext upload log. |
 | `--force` | off | Re-upload even files marked done in the state file. |
 | `--dry-run` | off | List planned uploads without contacting komoot. |
 
@@ -93,6 +95,10 @@ This writes two single-file executables to `dist\`:
    activity exported in a second format (same filename stem) is also skipped, since
    komoot doesn't dedupe a TCX against an already-uploaded GPX. Use `--force` to
    override.
+4. **Log** — each upload's result and the final summary are also appended to a
+   plaintext `komoot_upload_log.txt` in the working directory (next to the state
+   file), with a timestamped header per run. Use `--log-file` to change the path or
+   `--no-log` to skip it.
 
 Elapsed time is read from GPX/TCX timestamps. `.fit` is recognized but currently
 fails fast with a clear message (planned, see TASKS.md).
