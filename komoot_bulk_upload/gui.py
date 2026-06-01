@@ -26,6 +26,7 @@ from .cli import collect_files
 from .payload import upload_payload, UnsupportedFormat
 from .gpx import read_metadata
 from .state import UploadState, file_hash, activity_key
+from .logfile import RunLog, DEFAULT_LOG_FILE
 
 # Format choices for the dropdown: "all" plus each supported extension.
 FORMAT_CHOICES = ("all",) + tuple(DATA_TYPES)
@@ -34,10 +35,12 @@ FORMAT_CHOICES = ("all",) + tuple(DATA_TYPES)
 class KomootUploaderGUI:
     def __init__(self, root, default_sport="touringbicycle",
                  default_status="private", delay=2.0,
-                 state_file="komoot_upload_state.json"):
+                 state_file="komoot_upload_state.json",
+                 log_file=DEFAULT_LOG_FILE):
         self.root = root
         self.delay = delay
         self.state_file = state_file
+        self.log_file = log_file
 
         self.client = None          # set once sign-in succeeds
         self.username = None
@@ -252,29 +255,34 @@ class KomootUploaderGUI:
         title = self.name_var.get().strip() or german_activity_name(sport)
         state = UploadState(self.state_file)
         done_keys = state.done_activity_keys()
+        log = RunLog(self.log_file)
 
         def work():
             counts = {"created": 0, "duplicate": 0, "skipped": 0, "failed": 0}
             total = len(files)
+            log.log("Uploading {} file(s) (sport={}, name={!r}, status={}).".format(
+                total, sport, title, status))
+
+            def progress(i, msg):
+                """Show a line in the GUI and mirror it to the log file."""
+                log.log(msg)
+                self.events.put(("progress", i, total, msg))
+
             for i, path in enumerate(files, 1):
                 base = os.path.basename(path)
                 digest = file_hash(path)
                 akey = activity_key(path)
                 if state.is_done(digest) or akey in done_keys:
                     counts["skipped"] += 1
-                    self.events.put(
-                        ("progress", i, total,
-                         "[{}/{}] {} -> skipped (already uploaded)".format(
-                             i, total, base)))
+                    progress(i, "[{}/{}] {} -> skipped (already uploaded)".format(
+                        i, total, base))
                     continue
                 _, elapsed = read_metadata(path)
                 try:
                     data, dtype = upload_payload(path)
                 except UnsupportedFormat as e:
                     counts["failed"] += 1
-                    self.events.put(
-                        ("progress", i, total,
-                         "[{}/{}] {} -> FAILED: {}".format(i, total, base, e)))
+                    progress(i, "[{}/{}] {} -> FAILED: {}".format(i, total, base, e))
                     continue
                 try:
                     result = self.client.upload_tour(
@@ -284,20 +292,20 @@ class KomootUploaderGUI:
                     counts["failed"] += 1
                     state.record(digest, status="failed", file=path,
                                  name=title, activity_key=akey, error=str(e))
-                    self.events.put(
-                        ("progress", i, total,
-                         "[{}/{}] {} -> FAILED: {}".format(i, total, base, e)))
+                    progress(i, "[{}/{}] {} -> FAILED: {}".format(i, total, base, e))
                     continue
                 counts[result.status] += 1
                 state.record(digest, status=result.status, file=path,
                              name=title, activity_key=akey,
                              tour_id=result.tour_id)
                 done_keys.add(akey)
-                self.events.put(
-                    ("progress", i, total,
-                     "[{}/{}] {} -> {}".format(i, total, base, result.status)))
+                progress(i, "[{}/{}] {} -> {}".format(
+                    i, total, base, result.status))
                 if i < total and self.delay > 0:
                     time.sleep(self.delay)
+            log.log("Done. created={created} duplicate={duplicate} "
+                    "skipped={skipped} failed={failed}".format(**counts))
+            log.close()
             self.events.put(("done", counts))
 
         threading.Thread(target=work, daemon=True).start()
@@ -331,6 +339,9 @@ class KomootUploaderGUI:
                     self.progress_var.set("Done")
                     self._log("Done. created={created} duplicate={duplicate} "
                               "skipped={skipped} failed={failed}".format(**counts))
+                    if self.log_file:
+                        self._log("Log written to {}".format(
+                            os.path.abspath(self.log_file)))
         except queue.Empty:
             pass
         self.root.after(100, self._drain_events)
@@ -346,6 +357,8 @@ def run(args=None):
             default_status=getattr(args, "status", "private"),
             delay=getattr(args, "delay", 2.0),
             state_file=getattr(args, "state_file", "komoot_upload_state.json"),
+            log_file="" if getattr(args, "no_log", False)
+                     else getattr(args, "log_file", DEFAULT_LOG_FILE),
         )
     KomootUploaderGUI(root, **kwargs)
     root.mainloop()

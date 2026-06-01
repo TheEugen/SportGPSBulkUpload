@@ -15,6 +15,7 @@ from .api import (
 from .payload import upload_payload, UnsupportedFormat
 from .gpx import read_metadata
 from .state import UploadState, file_hash, activity_key
+from .logfile import RunLog, DEFAULT_LOG_FILE
 
 # File extensions we can upload (matches api.DATA_TYPES keys).
 SUPPORTED_EXTS = tuple("." + ext for ext in DATA_TYPES)
@@ -70,6 +71,15 @@ def build_parser():
     p.add_argument(
         "--force", action="store_true",
         help="Re-upload files even if the state file marks them done.",
+    )
+    p.add_argument(
+        "--log-file", default=DEFAULT_LOG_FILE,
+        help="Plaintext log of each upload, in the working directory "
+             "(default: {}).".format(DEFAULT_LOG_FILE),
+    )
+    p.add_argument(
+        "--no-log", action="store_true",
+        help="Don't write the plaintext upload log.",
     )
     p.add_argument(
         "--dry-run", action="store_true",
@@ -159,17 +169,26 @@ def main(argv=None):
     counts = {"created": 0, "duplicate": 0, "skipped": 0, "failed": 0}
     total = len(files)
 
+    log = RunLog("" if args.no_log else args.log_file)
+
+    def emit(line):
+        print(line)
+        log.log(line)
+
+    emit("Uploading {} file(s) (sport={}, name={!r}, status={}).".format(
+        total, args.sport, title, args.status))
+
     for i, path in enumerate(files, 1):
         prefix = "[{}/{}] {}".format(i, total, os.path.basename(path))
         digest = file_hash(path)
         akey = activity_key(path)
 
         if not args.force and state.is_done(digest):
-            print(prefix + " -> skipped (already uploaded)")
+            emit(prefix + " -> skipped (already uploaded)")
             counts["skipped"] += 1
             continue
         if not args.force and akey in done_keys:
-            print(prefix + " -> skipped (same activity already uploaded)")
+            emit(prefix + " -> skipped (same activity already uploaded)")
             counts["skipped"] += 1
             continue
 
@@ -177,7 +196,7 @@ def main(argv=None):
         try:
             data, dtype = upload_payload(path)
         except UnsupportedFormat as e:
-            print(prefix + " -> FAILED: {}".format(e))
+            emit(prefix + " -> FAILED: {}".format(e))
             counts["failed"] += 1
             continue  # not recorded, so a later run can retry once supported
         try:
@@ -187,14 +206,14 @@ def main(argv=None):
                 time_in_motion=elapsed if args.derive_time else None,
             )
         except KomootError as e:
-            print(prefix + " -> FAILED: {}".format(e))
+            emit(prefix + " -> FAILED: {}".format(e))
             counts["failed"] += 1
             state.record(digest, status="failed", file=path, name=title,
                          activity_key=akey, error=str(e))
             continue
 
         counts[result.status] += 1
-        print(prefix + " -> {}{}".format(
+        emit(prefix + " -> {}{}".format(
             result.status, " (id " + str(result.tour_id) + ")" if result.tour_id else ""))
         state.record(digest, status=result.status, file=path, name=title,
                      activity_key=akey, tour_id=result.tour_id)
@@ -203,6 +222,11 @@ def main(argv=None):
         if i < total and args.delay > 0:
             time.sleep(args.delay)
 
-    print("\nDone. created={created} duplicate={duplicate} "
-          "skipped={skipped} failed={failed}".format(**counts))
+    summary = ("Done. created={created} duplicate={duplicate} "
+               "skipped={skipped} failed={failed}".format(**counts))
+    print("\n" + summary)
+    log.log(summary)
+    if log.active:
+        print("Log written to {}".format(os.path.abspath(args.log_file)))
+    log.close()
     return 1 if counts["failed"] else 0
