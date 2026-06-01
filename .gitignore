@@ -14,5 +14,6 @@ komoot_upload_state.json
 # Local Claude Code settings (machine-specific)
 .claude/settings.local.json
 
-# Markdown docs (kept local only)
+# Markdown docs kept local only — except the public README.
 *.md
+!README.md
