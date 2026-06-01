@@ -42,6 +42,23 @@ Credentials are taken from, in order: `--email` / `--password`, then the
 `KOMOOT_EMAIL` / `KOMOOT_PASSWORD` environment variables, then an interactive
 prompt (the password prompt is hidden).
 
+## Build a Windows .exe
+
+To produce standalone executables that run without a Python install, use
+[PyInstaller](https://pyinstaller.org/):
+
+```powershell
+py -m pip install pyinstaller
+.\build_exe.ps1
+```
+
+This writes two single-file executables to `dist\`:
+
+| File | Use |
+| --- | --- |
+| `SportGPSBulkUpload.exe` | Console build — the full CLI (and `--gui`). Run it from a terminal; it shows progress and prompts for credentials. |
+| `SportGPSBulkUpload-GUI.exe` | Windowed build — opens the GUI directly with no console window, for double-clicking. |
+
 ### Arguments
 
 | Option | Default | Description |
