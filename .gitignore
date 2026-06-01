@@ -21,3 +21,5 @@ komoot_upload_state.json
 # Local-only sample data and run logs
 examples/
 LOG.md
+LOG_*.md
+*_LOG.md
