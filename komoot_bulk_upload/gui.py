@@ -23,7 +23,7 @@ from .api import (
     data_type_for,
 )
 from .cli import collect_files
-from .convert import upload_payload, UnsupportedFormat
+from .payload import upload_payload, UnsupportedFormat
 from .gpx import read_metadata, title_for
 from .state import UploadState, file_hash
 

@@ -3,8 +3,8 @@
 Upload many `.gpx` or `.tcx` activities (e.g. exported from SIGMA DATA CENTER
 5.9.1) to a komoot account in one go. komoot's website only accepts one activity
 at a time; this tool drives komoot's **undocumented internal API** to upload a
-whole folder. `.tcx` files are converted to GPX automatically before upload.
-(`.fit` is recognized but not yet supported — use the GPX or TCX export for those.)
+whole folder. `.gpx` and `.tcx` files upload directly; `.fit` is recognized but
+not yet supported — use the GPX or TCX export for those.
 
 > ⚠️ The komoot endpoints used here are unofficial and may change or break without
 > notice. Uploads default to **private** and the run is **resumable**, so you can
@@ -66,16 +66,14 @@ prompt (the password prompt is hidden).
 
 1. **Sign in** — `GET /v006/account/email/{email}/` with HTTP Basic Auth returns a
    session token; the client then authenticates subsequent calls with it.
-2. **Convert** — a `.tcx` file is converted to GPX locally first; a `.gpx` file is
-   sent as-is.
-3. **Upload** — the GPX body is `POST`ed to `/v007/tours/` with `data_type=gpx`
-   plus `sport` / `status` / `name` query params (and **no `Content-Type` header** —
-   komoot reads the raw body). `201` = created, `202` = duplicate.
-4. **Resume** — every file's SHA-1 and outcome are written to the state file, so a
+2. **Upload** — the raw file body is `POST`ed to `/v007/tours/` with `data_type`
+   (`gpx`/`tcx`) plus `sport` / `status` / `name` query params (and **no
+   `Content-Type` header** — komoot reads the raw body). `201` = created,
+   `202` = duplicate.
+3. **Resume** — every file's SHA-1 and outcome are written to the state file, so a
    re-run skips anything already created or detected as a duplicate.
 
-Tour titles come from a GPX `<name>`, else the filename; elapsed time is read from
-GPX/TCX timestamps. `.fit` is recognized but currently fails fast with a clear
-message (its binary format needs a parser — planned, see TASKS.md).
+Elapsed time is read from GPX/TCX timestamps. `.fit` is recognized but currently
+fails fast with a clear message (planned, see TASKS.md).
 
 Recommended first run: `--dry-run`, then a single file, then the full batch.

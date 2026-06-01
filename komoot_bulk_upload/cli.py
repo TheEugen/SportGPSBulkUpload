@@ -12,7 +12,7 @@ from .api import (
     KomootClient, KomootError, KomootAuthError, PRIVACY, SPORTS,
     DATA_TYPES, data_type_for,
 )
-from .convert import upload_payload, UnsupportedFormat
+from .payload import upload_payload, UnsupportedFormat
 from .gpx import read_metadata, title_for
 from .state import UploadState, file_hash
 
@@ -128,12 +128,10 @@ def main(argv=None):
     print("Found {} activity file(s).".format(len(files)))
 
     if args.dry_run:
-        labels = {"gpx": "gpx", "tcx": "tcx->gpx", "fit": "fit (unsupported)"}
         for f in files:
             name, elapsed = read_metadata(f)
-            label = labels.get(data_type_for(f), data_type_for(f))
             print("  would upload: {!r}  (type={}, name={!r}, elapsed={}s)".format(
-                os.path.basename(f), label, name or "<filename>", elapsed))
+                os.path.basename(f), data_type_for(f), name or "<filename>", elapsed))
         return 0
 
     email, password, token = resolve_credentials(args)
