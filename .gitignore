@@ -17,3 +17,7 @@ komoot_upload_state.json
 # Markdown docs kept local only — except the public README.
 *.md
 !README.md
+
+# Local-only sample data and run logs
+examples/
+LOG.md
