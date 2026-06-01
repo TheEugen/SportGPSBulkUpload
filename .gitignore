@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Resume state written at runtime
+komoot_upload_state.json
+*.json.tmp
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
+
+# Markdown docs (kept local only)
+*.md
