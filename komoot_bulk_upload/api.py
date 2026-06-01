@@ -28,9 +28,28 @@ SPORTS = (
 
 PRIVACY = ("private", "friends", "public")
 
-# File formats komoot's importer recognizes. In practice only GPX is POSTed to
-# the API (TCX/FIT are converted to GPX first — see convert.py); the value is
-# passed through as the `data_type` query param.
+# German default tour names per sport, used when the user gives no name.
+GERMAN_SPORT_NAMES = {
+    "touringbicycle": "Fahrradtour",
+    "e_touringbicycle": "E-Bike-Tour",
+    "racebike": "Rennradtour",
+    "e_racebike": "E-Rennradtour",
+    "mtb": "Mountainbike-Tour",
+    "e_mtb": "E-Mountainbike-Tour",
+    "mtb_easy": "Gravel-Tour",
+    "citybike": "Citybike-Tour",
+    "hike": "Wanderung",
+    "jogging": "Laufen",
+}
+
+
+def german_activity_name(sport):
+    """German default tour name for a komoot sport id (fallback: 'Aktivität')."""
+    return GERMAN_SPORT_NAMES.get(sport, "Aktivität")
+
+
+# File formats komoot's importer recognizes. GPX and TCX are uploaded raw with
+# their own value as the `data_type` query param; FIT is gated (see payload.py).
 DATA_TYPES = ("gpx", "tcx", "fit")
 
 
@@ -73,7 +92,7 @@ class KomootClient:
         self.token = token
         self.username = None
         self.session = requests.Session()
-        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.3"
+        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.4"
         # When a token is supplied we can authenticate directly.
         self.auth = HTTPBasicAuth(email, token) if token else None
 

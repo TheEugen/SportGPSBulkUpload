@@ -20,12 +20,12 @@ from tkinter import ttk, filedialog
 
 from .api import (
     KomootClient, KomootError, KomootAuthError, PRIVACY, SPORTS, DATA_TYPES,
-    data_type_for,
+    data_type_for, german_activity_name,
 )
 from .cli import collect_files
 from .payload import upload_payload, UnsupportedFormat
-from .gpx import read_metadata, title_for
-from .state import UploadState, file_hash
+from .gpx import read_metadata
+from .state import UploadState, file_hash, activity_key
 
 # Format choices for the dropdown: "all" plus each supported extension.
 FORMAT_CHOICES = ("all",) + tuple(DATA_TYPES)
@@ -105,18 +105,34 @@ class KomootUploaderGUI:
 
         ttk.Label(f, text="Sport:").grid(row=2, column=0, sticky="w", pady=(5, 0))
         self.sport_var = tk.StringVar(value=default_sport)
-        ttk.Combobox(f, textvariable=self.sport_var, values=SPORTS,
-                     width=18).grid(row=2, column=1, sticky="w", padx=5, pady=(5, 0))
+        sport_cb = ttk.Combobox(f, textvariable=self.sport_var, values=SPORTS,
+                                width=18)
+        sport_cb.grid(row=2, column=1, sticky="w", padx=5, pady=(5, 0))
+        sport_cb.bind("<<ComboboxSelected>>", self._on_sport_changed)
+        sport_cb.bind("<KeyRelease>", self._on_sport_changed)
 
-        ttk.Label(f, text="Privacy:").grid(row=3, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(f, text="Name:").grid(row=3, column=0, sticky="w", pady=(5, 0))
+        self._name_default = german_activity_name(default_sport)
+        self.name_var = tk.StringVar(value=self._name_default)
+        ttk.Entry(f, textvariable=self.name_var).grid(
+            row=3, column=1, columnspan=2, sticky="ew", padx=5, pady=(5, 0))
+
+        ttk.Label(f, text="Privacy:").grid(row=4, column=0, sticky="w", pady=(5, 0))
         self.status_var = tk.StringVar(value=default_status)
         ttk.Combobox(f, textvariable=self.status_var, values=PRIVACY,
                      state="readonly", width=10).grid(
-            row=3, column=1, sticky="w", padx=5, pady=(5, 0))
+            row=4, column=1, sticky="w", padx=5, pady=(5, 0))
 
         self.summary_var = tk.StringVar()
         ttk.Label(f, textvariable=self.summary_var, foreground="#555").grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+            row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def _on_sport_changed(self, _event=None):
+        """Keep the name field on the German default until the user edits it."""
+        new_default = german_activity_name(self.sport_var.get().strip())
+        if self.name_var.get().strip() in ("", self._name_default):
+            self.name_var.set(new_default)
+        self._name_default = new_default
 
     def _build_progress(self):
         f = ttk.Frame(self.root, padding=(10, 5))
@@ -233,7 +249,9 @@ class KomootUploaderGUI:
 
         sport = self.sport_var.get().strip()
         status = self.status_var.get()
+        title = self.name_var.get().strip() or german_activity_name(sport)
         state = UploadState(self.state_file)
+        done_keys = state.done_activity_keys()
 
         def work():
             counts = {"created": 0, "duplicate": 0, "skipped": 0, "failed": 0}
@@ -241,16 +259,17 @@ class KomootUploaderGUI:
             for i, path in enumerate(files, 1):
                 base = os.path.basename(path)
                 digest = file_hash(path)
-                if state.is_done(digest):
+                akey = activity_key(path)
+                if state.is_done(digest) or akey in done_keys:
                     counts["skipped"] += 1
                     self.events.put(
                         ("progress", i, total,
-                         "[{}/{}] {} -> skipped".format(i, total, base)))
+                         "[{}/{}] {} -> skipped (already uploaded)".format(
+                             i, total, base)))
                     continue
-                name, elapsed = read_metadata(path)
-                title = name or title_for(path)
+                _, elapsed = read_metadata(path)
                 try:
-                    data, dtype = upload_payload(path)  # TCX -> GPX here
+                    data, dtype = upload_payload(path)
                 except UnsupportedFormat as e:
                     counts["failed"] += 1
                     self.events.put(
@@ -264,14 +283,16 @@ class KomootUploaderGUI:
                 except KomootError as e:
                     counts["failed"] += 1
                     state.record(digest, status="failed", file=path,
-                                 name=title, error=str(e))
+                                 name=title, activity_key=akey, error=str(e))
                     self.events.put(
                         ("progress", i, total,
                          "[{}/{}] {} -> FAILED: {}".format(i, total, base, e)))
                     continue
                 counts[result.status] += 1
                 state.record(digest, status=result.status, file=path,
-                             name=title, tour_id=result.tour_id)
+                             name=title, activity_key=akey,
+                             tour_id=result.tour_id)
+                done_keys.add(akey)
                 self.events.put(
                     ("progress", i, total,
                      "[{}/{}] {} -> {}".format(i, total, base, result.status)))

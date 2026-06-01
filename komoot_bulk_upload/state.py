@@ -14,6 +14,15 @@ def file_hash(path):
     return h.hexdigest()
 
 
+def activity_key(path):
+    """A cross-format key for an activity: the lower-cased filename stem.
+
+    SIGMA exports the same activity to .gpx/.tcx/.fit with the same base name,
+    so this lets us skip re-uploading an activity already sent in another format
+    (komoot only dedupes same-format content, not e.g. a TCX against a GPX)."""
+    return os.path.splitext(os.path.basename(path))[0].lower()
+
+
 class UploadState:
     """JSON-backed record of which files have already been uploaded."""
 
@@ -31,6 +40,21 @@ class UploadState:
     def is_done(self, file_hash_):
         rec = self.data["uploads"].get(file_hash_)
         return rec is not None and rec.get("status") in ("created", "duplicate")
+
+    def done_activity_keys(self):
+        """Activity keys already uploaded (created/duplicate), for cross-format
+        dedupe. Falls back to deriving the key from each record's stored file
+        path, so activities uploaded before this field existed still count."""
+        keys = set()
+        for rec in self.data["uploads"].values():
+            if rec.get("status") not in ("created", "duplicate"):
+                continue
+            key = rec.get("activity_key")
+            if not key and rec.get("file"):
+                key = os.path.splitext(os.path.basename(rec["file"]))[0].lower()
+            if key:
+                keys.add(key)
+        return keys
 
     def get(self, file_hash_):
         return self.data["uploads"].get(file_hash_)

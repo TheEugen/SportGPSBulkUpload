@@ -50,6 +50,7 @@ prompt (the password prompt is hidden).
 | `--email` / `--password` | env / prompt | komoot credentials. |
 | `--token` | — | Existing auth token; skips the sign-in step. |
 | `--sport` | `touringbicycle` | komoot sport id applied to every tour (see below). |
+| `--name` | German activity name | Tour name for every upload (default: the German name for `--sport`, e.g. `Fahrradtour`). |
 | `--status` | `private` | `private`, `friends`, or `public`. |
 | `--derive-time` | off | Send elapsed time (from GPX timestamps) as `time_in_motion`. |
 | `--delay` | `2.0` | Seconds between uploads, to be gentle on the API. |
@@ -71,7 +72,10 @@ prompt (the password prompt is hidden).
    `Content-Type` header** — komoot reads the raw body). `201` = created,
    `202` = duplicate.
 3. **Resume** — every file's SHA-1 and outcome are written to the state file, so a
-   re-run skips anything already created or detected as a duplicate.
+   re-run skips anything already created or detected as a duplicate. The same
+   activity exported in a second format (same filename stem) is also skipped, since
+   komoot doesn't dedupe a TCX against an already-uploaded GPX. Use `--force` to
+   override.
 
 Elapsed time is read from GPX/TCX timestamps. `.fit` is recognized but currently
 fails fast with a clear message (planned, see TASKS.md).

@@ -53,12 +53,6 @@ def read_metadata(path):
     return name, elapsed
 
 
-def title_for(path):
-    """Best tour title for a file: its GPX name, else the filename stem."""
-    name, _ = read_metadata(path)
-    return name or os.path.splitext(os.path.basename(path))[0]
-
-
 def _parse_iso(value):
     # GPX uses ISO 8601 UTC, typically ending in 'Z'.
     try:
