@@ -12,6 +12,7 @@ API_BASE = "https://api.komoot.de"
 SIGNIN_URL = API_BASE + "/v006/account/email/{email}/"
 UPLOAD_URL = API_BASE + "/v007/tours/"
 TOURS_URL = API_BASE + "/v007/users/{user_id}/tours/"
+TOUR_URL = API_BASE + "/v007/tours/{tour_id}"
 
 # Public web page for a tour id (handy for the duplicate report).
 TOUR_WEB_URL = "https://www.komoot.com/tour/{tour_id}"
@@ -96,7 +97,7 @@ class KomootClient:
         self.token = token
         self.username = None
         self.session = requests.Session()
-        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.6"
+        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.7"
         # When a token is supplied we can authenticate directly.
         self.auth = HTTPBasicAuth(email, token) if token else None
 
@@ -201,6 +202,26 @@ class KomootClient:
             elif not (body.get("_links") or {}).get("next"):
                 break
             page += 1
+
+    def delete_tour(self, tour_id):
+        """Delete one tour by id via `DELETE /v007/tours/{tour_id}`.
+
+        Returns True on success; raises KomootError otherwise. Destructive and
+        irreversible — callers must confirm with the user first.
+        """
+        if self.auth is None:
+            self.signin()
+        url = TOUR_URL.format(tour_id=quote(str(tour_id), safe=""))
+        resp = self.session.delete(url, auth=self.auth)
+        if resp.status_code in (200, 204):
+            return True
+        if resp.status_code == 404:
+            raise KomootError("Tour {} not found (already deleted?).".format(tour_id))
+        if resp.status_code in (401, 403):
+            raise KomootAuthError(
+                "Not authorized to delete tour {} (session expired?).".format(tour_id))
+        raise KomootError(
+            "Delete failed (HTTP {}): {}".format(resp.status_code, resp.text[:200]))
 
 
 def _tour_id(resp):

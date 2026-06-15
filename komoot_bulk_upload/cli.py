@@ -51,6 +51,11 @@ def build_parser():
         help="Minutes between two tours' start times to treat them as the same "
              "ride, for --find-duplicates (default: 15).",
     )
+    p.add_argument(
+        "--delete-duplicates", action="store_true",
+        help="After --find-duplicates, interactively choose tours to DELETE from "
+             "each group (asks for confirmation; needs an interactive terminal).",
+    )
     p.add_argument("--email", help="komoot account email.")
     p.add_argument("--password", help="komoot password (prefer the prompt/env var).")
     p.add_argument("--token", help="Existing komoot auth token; skips sign-in.")
@@ -184,10 +189,65 @@ def find_duplicates_command(args):
         for line in format_groups(groups):
             emit(line)
 
+    if groups and args.delete_duplicates:
+        if not sys.stdin.isatty():
+            emit("--delete-duplicates needs an interactive terminal; skipping deletion.")
+        else:
+            _delete_duplicates_interactive(client, groups, emit)
+
     if log.active:
         print("Report written to {}".format(os.path.abspath(args.log_file)))
     log.close()
     return 0
+
+
+def _parse_delete_selection(text, group):
+    """Map a user entry like '1,3' to tour ids within `group` (ignores junk)."""
+    ids = []
+    for tok in text.replace(" ", "").split(","):
+        if not tok:
+            continue
+        if not tok.isdigit() or not (1 <= int(tok) <= len(group)):
+            print("    Ignoring invalid choice: {!r}".format(tok))
+            continue
+        ids.append(group[int(tok) - 1].id)
+    return ids
+
+
+def _delete_duplicates_interactive(client, groups, emit):
+    """Walk each duplicate group and delete only what the user confirms.
+
+    Nothing is removed without an explicit 'y' confirmation; 'q' stops early.
+    """
+    print("\nInteractive deletion — pick tours to remove from each group.")
+    print("Deletions are permanent and confirmed one group at a time.\n")
+    deleted = 0
+    for n, group in enumerate(groups, 1):
+        print("Group {} of {}:".format(n, len(groups)))
+        for i, tour in enumerate(group, 1):
+            print("  [{}] {}".format(i, tour.summary()))
+        sel = input("  Delete which? e.g. '2' or '1,3'; Enter keeps all, 'q' "
+                    "stops: ").strip().lower()
+        if sel == "q":
+            break
+        ids = _parse_delete_selection(sel, group) if sel else []
+        if not ids:
+            print("  Kept all.\n")
+            continue
+        confirm = input("  Permanently delete tour(s) {}? [y/N]: ".format(
+            ", ".join(str(i) for i in ids))).strip().lower()
+        if confirm != "y":
+            print("  Skipped.\n")
+            continue
+        for tid in ids:
+            try:
+                client.delete_tour(tid)
+                deleted += 1
+                emit("  deleted tour {}".format(tid))
+            except KomootError as e:
+                emit("  FAILED to delete tour {}: {}".format(tid, e))
+        print()
+    emit("Deletion finished. {} tour(s) deleted.".format(deleted))
 
 
 def main(argv=None):
