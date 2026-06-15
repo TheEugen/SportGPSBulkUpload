@@ -194,20 +194,25 @@ def _to_int(value):
 def _source_category(raw):
     """Classify a tour's origin as 'recorded', 'import', or 'other'.
 
-    komoot tags a tour's source in a `source` field whose api/type mentions
-    e.g. ".../tour/recorded" or ".../tour/import". Recorded = tracked in the
-    komoot app; import = uploaded file (the SIGMA export). This both drives
-    cross-source matching and tells the user which tour is which in the report.
-    Robust to `source` being a dict or a string, and to truncation.
+    komoot tags a tour's source in a `source` field whose **api** path is the
+    discriminator: ".../tour/recorded" (tracked in the komoot app) vs
+    ".../tour/import" (an uploaded file, e.g. the SIGMA export). We read ONLY the
+    api path — every recorded-type tour also carries a `type` of "tour_recorded",
+    so joining all the dict's values would mislabel imports as recorded. "import"
+    is checked first for the same reason. Robust to `source` being a dict, a
+    string, or absent.
     """
     source = raw.get("source")
     if isinstance(source, dict):
-        source = " ".join(str(v) for v in source.values())
-    text = (str(source) if source is not None else "").lower()
-    if "record" in text:
-        return "recorded"
+        text = str(source.get("api") or source.get("type")
+                   or source.get("name") or "")
+    else:
+        text = str(source) if source is not None else ""
+    text = text.lower()
     if "import" in text or "upload" in text:
         return "import"
+    if "record" in text:
+        return "recorded"
     return "other"
 
 

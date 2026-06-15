@@ -189,8 +189,13 @@ def find_duplicates_command(args):
         log.log(line)
 
     dated = sum(1 for t in tours if t.start is not None)
+    srcs = {"recorded": 0, "import": 0, "other": 0}
+    for t in tours:
+        srcs[t.source] = srcs.get(t.source, 0) + 1
     emit("Found {} recorded tour(s); {} have a usable start date.".format(
         len(tours), dated))
+    emit("Sources: {recorded} app-recorded, {import} imported, {other} other.".format(
+        **srcs))
     if tours and dated == 0:
         emit("WARNING: no tour dates could be parsed — matching can't work. "
              "Re-run with --dump-tours tours.csv and share a few rows so the "

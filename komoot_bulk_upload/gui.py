@@ -268,7 +268,12 @@ class KomootUploaderGUI:
                 self.events.put(("dupes_err", str(e)))
                 return
             groups = find_duplicate_groups(tours, time_window_s=window_s)
-            lines = ["Found {} recorded tour(s).".format(len(tours))]
+            srcs = {"recorded": 0, "import": 0, "other": 0}
+            for t in tours:
+                srcs[t.source] = srcs.get(t.source, 0) + 1
+            lines = ["Found {} recorded tour(s).".format(len(tours)),
+                     "Sources: {recorded} app-recorded, {import} imported, "
+                     "{other} other.".format(**srcs)]
             if not groups:
                 lines.append("No likely duplicates found (cross-source, "
                              "near-equal distance, within {:g} min).".format(
