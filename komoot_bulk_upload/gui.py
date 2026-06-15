@@ -16,7 +16,7 @@ import queue
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 
 from .api import (
     KomootClient, KomootError, KomootAuthError, PRIVACY, SPORTS, DATA_TYPES,
@@ -278,7 +278,58 @@ class KomootUploaderGUI:
             for line in lines:
                 log.log(line)
             log.close()
-            self.events.put(("dupes_ok", lines))
+            self.events.put(("dupes_ok", lines, groups))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _open_dupes_window(self, groups):
+        """Show duplicate groups, each tour with a confirm-then-delete button."""
+        win = tk.Toplevel(self.root)
+        win.title("Duplicate tours — review and delete")
+        win.minsize(720, 420)
+
+        canvas = tk.Canvas(win, borderwidth=0)
+        scroll = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        ttk.Label(inner, foreground="#cf222e",
+                  text="Deleting a tour is permanent. Keep at least one tour "
+                       "per group.").pack(anchor="w", padx=10, pady=(10, 4))
+
+        for n, group in enumerate(groups, 1):
+            ttk.Label(inner, text="Group {} — {} tours".format(n, len(group)),
+                      font=("", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
+            for tour in group:
+                row = ttk.Frame(inner)
+                row.pack(fill="x", padx=16, pady=2)
+                text = tour.summary().replace("\n        ", "   ")
+                ttk.Label(row, text=text).pack(side="left", anchor="w")
+                btn = ttk.Button(row, text="Delete")
+                btn.configure(command=lambda t=tour, b=btn: self._on_delete_tour(t, b))
+                btn.pack(side="right", padx=(8, 0))
+
+    def _on_delete_tour(self, tour, btn):
+        if self.client is None:
+            return
+        if not messagebox.askyesno(
+                "Confirm deletion",
+                "Permanently delete tour {} ({!r})?\nThis cannot be undone.".format(
+                    tour.id, tour.name or "")):
+            return
+        btn.configure(state="disabled", text="Deleting…")
+
+        def work():
+            try:
+                self.client.delete_tour(tour.id)
+                self.events.put(("delete_ok", tour.id, btn))
+            except Exception as e:  # KomootError / network
+                self.events.put(("delete_err", tour.id, str(e), btn))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -384,10 +435,20 @@ class KomootUploaderGUI:
                     if self.log_file:
                         self._log("Report written to {}".format(
                             os.path.abspath(self.log_file)))
+                    if event[2]:
+                        self._open_dupes_window(event[2])
                 elif kind == "dupes_err":
                     self._log("Duplicate search failed: {}".format(event[1]))
                     self.progress_var.set("Idle")
                     self._set_busy(False)
+                elif kind == "delete_ok":
+                    _, tid, btn = event
+                    btn.configure(text="Deleted", state="disabled")
+                    self._log("Deleted tour {}.".format(tid))
+                elif kind == "delete_err":
+                    _, tid, msg, btn = event
+                    btn.configure(text="Delete", state="normal")
+                    self._log("Failed to delete tour {}: {}".format(tid, msg))
                 elif kind == "progress":
                     _, i, total, msg = event
                     self.progress.configure(value=i)
