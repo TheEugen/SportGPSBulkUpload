@@ -97,7 +97,7 @@ class KomootClient:
         self.token = token
         self.username = None
         self.session = requests.Session()
-        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.7"
+        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.8"
         # When a token is supplied we can authenticate directly.
         self.auth = HTTPBasicAuth(email, token) if token else None
 

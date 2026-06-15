@@ -1,6 +1,7 @@
 """Command-line entry point: bulk-upload a set of GPX files to komoot."""
 
 import argparse
+import csv
 import getpass
 import glob
 import os
@@ -47,14 +48,20 @@ def build_parser():
              "account (same ride tracked on two devices) for manual review.",
     )
     p.add_argument(
-        "--time-window", type=float, default=15.0,
-        help="Minutes between two tours' start times to treat them as the same "
-             "ride, for --find-duplicates (default: 15).",
+        "--time-window", type=float, default=360.0,
+        help="Max minutes between two tours' start times to still treat them as "
+             "the same ride, for --find-duplicates (default: 360 = 6 h; the two "
+             "sources' timestamps can be hours apart).",
     )
     p.add_argument(
         "--delete-duplicates", action="store_true",
         help="After --find-duplicates, interactively choose tours to DELETE from "
              "each group (asks for confirmation; needs an interactive terminal).",
+    )
+    p.add_argument(
+        "--dump-tours", metavar="PATH",
+        help="With --find-duplicates, write a CSV table of every fetched tour "
+             "(id/date/distance/duration/sport) for diagnosing matches.",
     )
     p.add_argument("--email", help="komoot account email.")
     p.add_argument("--password", help="komoot password (prefer the prompt/env var).")
@@ -175,15 +182,24 @@ def find_duplicates_command(args):
         print(line)
         log.log(line)
 
-    emit("Found {} recorded tour(s).".format(len(tours)))
+    dated = sum(1 for t in tours if t.start is not None)
+    emit("Found {} recorded tour(s); {} have a usable start date.".format(
+        len(tours), dated))
+    if tours and dated == 0:
+        emit("WARNING: no tour dates could be parsed — matching can't work. "
+             "Re-run with --dump-tours tours.csv and share a few rows so the "
+             "date format can be fixed.")
+    if args.dump_tours:
+        _write_tour_table(args.dump_tours, tours)
+        emit("Wrote tour table to {}".format(os.path.abspath(args.dump_tours)))
     if not groups:
-        emit("No likely duplicates found (start times within ±{:g} min).".format(
-            args.time_window))
+        emit("No likely duplicates found (cross-source, near-equal distance, "
+             "within {:g} min).".format(args.time_window))
     else:
         dup_total = sum(len(g) for g in groups)
         emit("Found {} duplicate group(s) covering {} tours "
-             "(start times within ±{:g} min). Nothing was deleted — review "
-             "and remove these in komoot:".format(
+             "(cross-source, near-equal distance, within {:g} min). Nothing was "
+             "deleted — review and remove these in komoot:".format(
                  len(groups), dup_total, args.time_window))
         emit("")
         for line in format_groups(groups):
@@ -199,6 +215,29 @@ def find_duplicates_command(args):
         print("Report written to {}".format(os.path.abspath(args.log_file)))
     log.close()
     return 0
+
+
+def _write_tour_table(path, tours):
+    """Write every tour to a CSV for diagnosing why duplicates do/don't match.
+
+    Sorted by start time (undated tours last) so two recordings of one ride sit
+    next to each other and any start-time offset between them is obvious.
+    """
+    dated = sorted((t for t in tours if t.start is not None), key=lambda t: t.start)
+    undated = [t for t in tours if t.start is None]
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "date_utc", "date_local", "distance_km",
+                    "duration_s", "sport", "source", "name"])
+        for t in dated + undated:
+            w.writerow([
+                t.id,
+                t.start.strftime("%Y-%m-%d %H:%M:%S") if t.start else "",
+                t.start.astimezone().strftime("%Y-%m-%d %H:%M:%S") if t.start else "",
+                "{:.2f}".format(t.distance_m / 1000.0) if t.distance_m is not None else "",
+                t.duration_s if t.duration_s is not None else "",
+                t.sport or "", t.source or "", t.name or "",
+            ])
 
 
 def _parse_delete_selection(text, group):

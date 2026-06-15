@@ -239,7 +239,7 @@ class KomootUploaderGUI:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_find_duplicates(self, time_window_min=15.0):
+    def _on_find_duplicates(self, time_window_min=360.0):
         """List likely-duplicate tours already in the account (read-only)."""
         if self.uploading:
             return
@@ -265,14 +265,15 @@ class KomootUploaderGUI:
             groups = find_duplicate_groups(tours, time_window_s=window_s)
             lines = ["Found {} recorded tour(s).".format(len(tours))]
             if not groups:
-                lines.append("No likely duplicates found (start times within "
-                             "±{:g} min).".format(time_window_min))
+                lines.append("No likely duplicates found (cross-source, "
+                             "near-equal distance, within {:g} min).".format(
+                                 time_window_min))
             else:
                 dup_total = sum(len(g) for g in groups)
                 lines.append(
-                    "Found {} duplicate group(s) covering {} tours (within "
-                    "±{:g} min). Nothing was deleted — review and remove in "
-                    "komoot:".format(len(groups), dup_total, time_window_min))
+                    "Found {} duplicate group(s) covering {} tours (cross-source, "
+                    "near-equal distance). Nothing was deleted — review and "
+                    "remove in komoot:".format(len(groups), dup_total))
                 lines.append("")
                 lines.extend(format_groups(groups))
             for line in lines:
