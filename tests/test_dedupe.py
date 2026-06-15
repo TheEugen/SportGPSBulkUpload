@@ -19,11 +19,12 @@ def raw_tour(id, date, distance=20000.0, duration=3600, sport="touringbicycle",
 class ParseTourTests(unittest.TestCase):
     def test_fields_are_normalized(self):
         t = parse_tour(raw_tour(7, "2024-08-15T07:23:45.000Z", distance=42000.0,
-                                 duration=7200, source={"type": "tour-upload"}))
+                                 duration=7200,
+                                 source={"api": "de.komoot.main-api/tour/import"}))
         self.assertEqual(t.id, 7)
         self.assertEqual(t.distance_m, 42000.0)
         self.assertEqual(t.duration_s, 7200)
-        self.assertEqual(t.source, "tour-upload")
+        self.assertEqual(t.source, "import")
         self.assertEqual(t.start.tzinfo, timezone.utc)
         self.assertIn("komoot.com/tour/7", t.url)
 
@@ -32,14 +33,18 @@ class ParseTourTests(unittest.TestCase):
         self.assertIsNone(t.start)
         self.assertIsNone(t.distance_m)
         self.assertIsNone(t.duration_s)
-        self.assertIsNone(t.source)
+        self.assertEqual(t.source, "other")
         self.assertIsNone(t.lat)
 
-    def test_string_source_is_kept_and_truncated(self):
-        self.assertEqual(parse_tour(raw_tour(1, None, source="sigma")).source,
-                         "sigma")
-        long = parse_tour(raw_tour(1, None, source="x" * 80)).source
-        self.assertEqual(len(long), 40)
+    def test_source_category_from_dict_or_string(self):
+        rec = parse_tour(raw_tour(1, None,
+                         source={"api": "de.komoot.main-api/tour/recorded/9"}))
+        imp = parse_tour(raw_tour(2, None,
+                         source='{"api":"de.komoot.main-api/tour/import"}'))
+        self.assertEqual(rec.source, "recorded")
+        self.assertEqual(imp.source, "import")
+        self.assertEqual(parse_tour(raw_tour(3, None, source="sigma")).source,
+                         "other")
 
 
 class ParseDateTests(unittest.TestCase):
@@ -118,6 +123,77 @@ class FindDuplicateGroupsTests(unittest.TestCase):
         ]
         groups = find_duplicate_groups(tours, time_window_s=900)
         self.assertEqual([g[0].id for g in groups], [3, 1])
+
+
+REC = {"api": "de.komoot.main-api/tour/recorded"}
+IMP = {"api": "de.komoot.main-api/tour/import"}
+
+
+class CrossSourceMatchingTests(unittest.TestCase):
+    """The real-world behaviour: SIGMA import vs komoot recording of one ride."""
+
+    def test_pairs_across_sources_hours_apart(self):
+        # Import stored ~2 h after the recording, near-identical distance.
+        tours = [
+            parse_tour(raw_tour(1, "2024-05-01T16:33:05Z", distance=31820,
+                                source=REC)),
+            parse_tour(raw_tour(2, "2024-05-01T18:34:43Z", distance=31830,
+                                source=IMP)),
+        ]
+        groups = find_duplicate_groups(tours)
+        self.assertEqual([[t.id for t in g] for g in groups], [[1, 2]])
+
+    def test_four_hour_offset_still_pairs(self):
+        tours = [
+            parse_tour(raw_tour(1, "2025-08-25T20:35:58Z", distance=31400,
+                                source=REC)),
+            parse_tour(raw_tour(2, "2025-08-26T00:36:48Z", distance=31320,
+                                source=IMP)),
+        ]
+        self.assertEqual(len(find_duplicate_groups(tours)), 1)
+
+    def test_same_source_is_not_a_duplicate(self):
+        # Two imports the same day with near-identical distance are different
+        # rides (komoot already dedupes within a source) — must not pair.
+        tours = [
+            parse_tour(raw_tour(1, "2023-04-15T16:15:22Z", distance=25160,
+                                source=IMP)),
+            parse_tour(raw_tour(2, "2023-04-15T18:58:17Z", distance=25270,
+                                source=IMP)),
+        ]
+        self.assertEqual(find_duplicate_groups(tours), [])
+
+    def test_distance_mismatch_blocks_cross_source_pair(self):
+        tours = [
+            parse_tour(raw_tour(1, "2023-10-19T14:16:52Z", distance=22440,
+                                source=REC)),
+            parse_tour(raw_tour(2, "2023-10-19T20:18:51Z", distance=52610,
+                                source=IMP)),
+        ]
+        self.assertEqual(find_duplicate_groups(tours), [])
+
+    def test_recording_pairs_with_nearer_matching_import_only(self):
+        # A recorded ride, its matching import (~2 h, same distance), and an
+        # unrelated import later that day (different distance) -> one pair.
+        tours = [
+            parse_tour(raw_tour(1, "2023-10-19T14:16:52Z", distance=22440,
+                                source=REC)),
+            parse_tour(raw_tour(2, "2023-10-19T16:19:53Z", distance=20980,
+                                source=IMP)),
+            parse_tour(raw_tour(3, "2023-10-19T20:18:51Z", distance=52610,
+                                source=IMP)),
+        ]
+        groups = find_duplicate_groups(tours)
+        self.assertEqual([[t.id for t in g] for g in groups], [[1, 2]])
+
+    def test_beyond_window_does_not_pair(self):
+        tours = [
+            parse_tour(raw_tour(1, "2024-05-01T08:00:00Z", distance=30000,
+                                source=REC)),
+            parse_tour(raw_tour(2, "2024-05-01T18:00:00Z", distance=30000,
+                                source=IMP)),
+        ]
+        self.assertEqual(find_duplicate_groups(tours), [])
 
 
 class FormattingTests(unittest.TestCase):

@@ -4,11 +4,22 @@ The problem this solves: an activity tracked on two devices at once (a SIGMA ROX
 and the komoot app) ends up as two tours komoot does NOT auto-dedupe, because the
 two devices are stopped a few metres apart, so their start/end coordinates differ.
 
-Coordinates are therefore the wrong signal. The robust one is **start time**: two
-recordings of the same ride begin within a couple of minutes of each other and
-cover a similar distance, regardless of GPS jitter. This module groups tours on
-that basis and never deletes anything — it only reports candidates for the user
-to review and remove by hand.
+What actually distinguishes such a pair (confirmed against a real 200-tour account):
+
+- **Source differs** — one tour is komoot-app *recorded*, the other a SIGMA *import*.
+  komoot already dedupes within a source, so genuine leftovers are always
+  cross-source. Two imports (or two recordings) on a day are different rides.
+- **Distance is near-identical** — within a couple of percent (e.g. 55.88 vs
+  56.08 km). This is the reliable signal.
+- **Start time is NOT close** — the import is stored hours after the recording
+  (a ~2 h, sometimes ~4 h, offset from komoot's timezone handling), so an exact
+  start-time match (an earlier, wrong assumption) misses everything. Time is used
+  only as a loose same-ride window (default 6 h) to avoid pairing different days.
+- **Duration is useless** — komoot recordings often leave the timer running, so a
+  ride's recorded duration can be wildly larger than the import's moving time.
+
+So matching is: cross-source + near-equal distance, within a wide time window.
+This module never deletes anything — it only reports candidates for review.
 
 Stdlib only; takes the raw tour dicts from ``KomootClient.list_tours()``.
 """
@@ -63,19 +74,26 @@ def parse_tour(raw):
         duration_s=_to_int(raw.get("duration")),
         lat=_to_float(point.get("lat")),
         lng=_to_float(point.get("lng")),
-        source=_source_hint(raw),
+        source=_source_category(raw),
     )
 
 
-def find_duplicate_groups(tours, time_window_s=900, distance_tol=0.20,
+def find_duplicate_groups(tours, time_window_s=21600, distance_tol=0.15,
                           distance_abs_m=1000.0):
-    """Group tours that look like the same ride recorded more than once.
+    """Group tours that look like the same ride captured on two devices.
 
-    Two tours match when their start times are within ``time_window_s`` AND their
-    distances are close — within ``distance_tol`` relative (e.g. 0.20 = 20%) OR
-    ``distance_abs_m`` absolute. (If either distance is missing, the time window
-    alone decides, so nothing is silently dropped.) Matching is transitive, so
-    three recordings of one ride form a single group.
+    Two tours match when ALL of:
+
+    - their distances are close — within ``distance_tol`` relative (0.15 = 15%)
+      OR ``distance_abs_m`` absolute (so small rides differing by <1 km match);
+    - they are not the same known source (a recorded tour pairs with an import,
+      never recording-with-recording or import-with-import — komoot already
+      dedupes those); tours of unknown source are not excluded;
+    - their start times are within ``time_window_s`` (default 6 h) — a loose
+      same-ride guard, because the two sources' timestamps can be ~2–4 h apart.
+
+    (If either distance is missing, distance is treated as a match so nothing is
+    silently dropped.) Matching is transitive, so 3 captures form one group.
 
     Returns a list of groups (each a list of >= 2 :class:`Tour`), newest first;
     tours within a group are ordered by start time.
@@ -83,8 +101,8 @@ def find_duplicate_groups(tours, time_window_s=900, distance_tol=0.20,
     items = [t for t in tours if t.start is not None]
     items.sort(key=lambda t: t.start)
 
-    # Union-find over the time-sorted list: only nearby starts can ever match,
-    # so the inner loop breaks as soon as the gap exceeds the window.
+    # Union-find over the time-sorted list: only tours within the window can
+    # match, so the inner loop breaks as soon as the gap exceeds it.
     parent = list(range(len(items)))
 
     def find(i):
@@ -101,6 +119,8 @@ def find_duplicate_groups(tours, time_window_s=900, distance_tol=0.20,
             gap = (items[j].start - items[i].start).total_seconds()
             if gap > time_window_s:
                 break
+            if _same_source(items[i], items[j]):
+                continue
             if _distance_matches(items[i], items[j], distance_tol, distance_abs_m):
                 union(i, j)
 
@@ -128,13 +148,26 @@ def format_groups(groups):
 
 # --- internals -----------------------------------------------------------
 
+_KNOWN_SOURCES = ("recorded", "import")
+
+
 def _distance_matches(a, b, rel, abs_m):
     if a.distance_m is None or b.distance_m is None:
-        return True  # can't compare distance; let the time window decide
+        return True  # can't compare distance; let the other criteria decide
     diff = abs(a.distance_m - b.distance_m)
     if diff <= abs_m:
         return True
     return diff / max(a.distance_m, b.distance_m, 1.0) <= rel
+
+
+def _same_source(a, b):
+    """True only when both tours have the SAME known source (recorded/import).
+
+    Such pairs are not cross-source duplicates — komoot already dedupes within a
+    source — so they're excluded. Unknown sources never count as a conflict.
+    """
+    return (a.source in _KNOWN_SOURCES and b.source in _KNOWN_SOURCES
+            and a.source == b.source)
 
 
 def _format_duration(seconds):
@@ -158,19 +191,24 @@ def _to_int(value):
         return None
 
 
-def _source_hint(raw):
-    """A short origin label for the report, if komoot exposes one.
+def _source_category(raw):
+    """Classify a tour's origin as 'recorded', 'import', or 'other'.
 
-    Imported (uploaded) tours and app-recorded tours carry different origin
-    metadata; this surfaces whatever is present so the user can tell which is
-    the SIGMA upload and which the komoot recording when deciding what to keep.
+    komoot tags a tour's source in a `source` field whose api/type mentions
+    e.g. ".../tour/recorded" or ".../tour/import". Recorded = tracked in the
+    komoot app; import = uploaded file (the SIGMA export). This both drives
+    cross-source matching and tells the user which tour is which in the report.
+    Robust to `source` being a dict or a string, and to truncation.
     """
     source = raw.get("source")
     if isinstance(source, dict):
-        source = source.get("type") or source.get("name") or source.get("api")
-    if isinstance(source, str) and source.strip():
-        return source.strip()[:40]
-    return None
+        source = " ".join(str(v) for v in source.values())
+    text = (str(source) if source is not None else "").lower()
+    if "record" in text:
+        return "recorded"
+    if "import" in text or "upload" in text:
+        return "import"
+    return "other"
 
 
 def _parse_date(text):
