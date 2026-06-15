@@ -16,6 +16,7 @@ from .payload import upload_payload, UnsupportedFormat
 from .gpx import read_metadata
 from .state import UploadState, file_hash, activity_key
 from .logfile import RunLog, DEFAULT_LOG_FILE
+from .dedupe import parse_tour, find_duplicate_groups, format_groups
 
 # File extensions we can upload (matches api.DATA_TYPES keys).
 SUPPORTED_EXTS = tuple("." + ext for ext in DATA_TYPES)
@@ -39,6 +40,16 @@ def build_parser():
     p.add_argument(
         "--gui", action="store_true",
         help="Launch the graphical interface instead of uploading from the CLI.",
+    )
+    p.add_argument(
+        "--find-duplicates", action="store_true",
+        help="Don't upload: list likely-duplicate tours already in your komoot "
+             "account (same ride tracked on two devices) for manual review.",
+    )
+    p.add_argument(
+        "--time-window", type=float, default=15.0,
+        help="Minutes between two tours' start times to treat them as the same "
+             "ride, for --find-duplicates (default: 15).",
     )
     p.add_argument("--email", help="komoot account email.")
     p.add_argument("--password", help="komoot password (prefer the prompt/env var).")
@@ -124,12 +135,70 @@ def resolve_credentials(args):
     return email, password, None
 
 
+def find_duplicates_command(args):
+    """Sign in, list recorded tours, and print likely-duplicate groups.
+
+    Read-only: nothing is deleted — the report lists tour ids + web links so the
+    user can review and remove duplicates by hand in komoot.
+    """
+    email, password, token = resolve_credentials(args)
+    client = KomootClient(email, password=password, token=token)
+    try:
+        username = client.signin()
+        print("Signed in to komoot{}.".format(
+            " as user " + str(username) if username else ""))
+    except KomootAuthError as e:
+        print("Authentication failed: {}".format(e), file=sys.stderr)
+        return 1
+    except KomootError as e:
+        print("Could not sign in: {}".format(e), file=sys.stderr)
+        return 1
+
+    print("Fetching recorded tours from komoot…")
+    try:
+        tours = [parse_tour(t) for t in client.list_tours()]
+    except KomootError as e:
+        print("Could not list tours: {}".format(e), file=sys.stderr)
+        return 1
+
+    window_s = int(args.time_window * 60)
+    groups = find_duplicate_groups(tours, time_window_s=window_s)
+
+    log = RunLog("" if args.no_log else args.log_file)
+
+    def emit(line):
+        print(line)
+        log.log(line)
+
+    emit("Found {} recorded tour(s).".format(len(tours)))
+    if not groups:
+        emit("No likely duplicates found (start times within ±{:g} min).".format(
+            args.time_window))
+    else:
+        dup_total = sum(len(g) for g in groups)
+        emit("Found {} duplicate group(s) covering {} tours "
+             "(start times within ±{:g} min). Nothing was deleted — review "
+             "and remove these in komoot:".format(
+                 len(groups), dup_total, args.time_window))
+        emit("")
+        for line in format_groups(groups):
+            emit(line)
+
+    if log.active:
+        print("Report written to {}".format(os.path.abspath(args.log_file)))
+    log.close()
+    return 0
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
     if args.gui:
         from .gui import run
         return run(args)
+
+    if args.find_duplicates:
+        return find_duplicates_command(args)
 
     if not args.paths:
         print("No paths given. Pass files/directories, or use --gui.",
