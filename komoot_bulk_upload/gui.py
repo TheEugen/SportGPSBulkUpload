@@ -27,6 +27,7 @@ from .payload import upload_payload, UnsupportedFormat
 from .gpx import read_metadata
 from .state import UploadState, file_hash, activity_key
 from .logfile import RunLog, DEFAULT_LOG_FILE
+from .dedupe import parse_tour, find_duplicate_groups, format_groups
 
 # Format choices for the dropdown: "all" plus each supported extension.
 FORMAT_CHOICES = ("all",) + tuple(DATA_TYPES)
@@ -149,8 +150,12 @@ class KomootUploaderGUI:
         ttk.Label(f, textvariable=self.progress_var).grid(
             row=0, column=1, padx=(8, 0))
 
+        self.dupes_btn = ttk.Button(f, text="Find duplicates",
+                                    command=self._on_find_duplicates)
+        self.dupes_btn.grid(row=0, column=2, padx=(8, 0))
+
         self.upload_btn = ttk.Button(f, text="Upload", command=self._on_upload)
-        self.upload_btn.grid(row=0, column=2, padx=(8, 0))
+        self.upload_btn.grid(row=0, column=3, padx=(8, 0))
 
     def _build_log(self):
         f = ttk.LabelFrame(self.root, text="Log", padding=5)
@@ -200,6 +205,7 @@ class KomootUploaderGUI:
         state = "disabled" if busy else "normal"
         self.signin_btn.configure(state=state)
         self.upload_btn.configure(state=state)
+        self.dupes_btn.configure(state=state)
 
     # --- event handlers --------------------------------------------------
 
@@ -230,6 +236,49 @@ class KomootUploaderGUI:
                 self.events.put(("signin_err", str(e)))
             except Exception as e:  # network/other
                 self.events.put(("signin_err", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_find_duplicates(self, time_window_min=15.0):
+        """List likely-duplicate tours already in the account (read-only)."""
+        if self.uploading:
+            return
+        if self.client is None:
+            self._log("Sign in before searching for duplicates.")
+            return
+
+        self._set_busy(True)
+        self.progress_var.set("Searching…")
+        self._log("Fetching recorded tours from komoot…")
+        log = RunLog(self.log_file)
+        window_s = int(time_window_min * 60)
+
+        def work():
+            try:
+                tours = [parse_tour(t) for t in self.client.list_tours()]
+            except KomootError as e:
+                self.events.put(("dupes_err", str(e)))
+                return
+            except Exception as e:  # network/other
+                self.events.put(("dupes_err", str(e)))
+                return
+            groups = find_duplicate_groups(tours, time_window_s=window_s)
+            lines = ["Found {} recorded tour(s).".format(len(tours))]
+            if not groups:
+                lines.append("No likely duplicates found (start times within "
+                             "±{:g} min).".format(time_window_min))
+            else:
+                dup_total = sum(len(g) for g in groups)
+                lines.append(
+                    "Found {} duplicate group(s) covering {} tours (within "
+                    "±{:g} min). Nothing was deleted — review and remove in "
+                    "komoot:".format(len(groups), dup_total, time_window_min))
+                lines.append("")
+                lines.extend(format_groups(groups))
+            for line in lines:
+                log.log(line)
+            log.close()
+            self.events.put(("dupes_ok", lines))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -325,6 +374,18 @@ class KomootUploaderGUI:
                     self._set_busy(False)
                 elif kind == "signin_err":
                     self._log("Sign-in failed: {}".format(event[1]))
+                    self.progress_var.set("Idle")
+                    self._set_busy(False)
+                elif kind == "dupes_ok":
+                    for line in event[1]:
+                        self._log(line)
+                    self.progress_var.set("Idle")
+                    self._set_busy(False)
+                    if self.log_file:
+                        self._log("Report written to {}".format(
+                            os.path.abspath(self.log_file)))
+                elif kind == "dupes_err":
+                    self._log("Duplicate search failed: {}".format(event[1]))
                     self.progress_var.set("Idle")
                     self._set_busy(False)
                 elif kind == "progress":

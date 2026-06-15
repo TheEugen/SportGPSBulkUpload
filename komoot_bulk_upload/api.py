@@ -11,6 +11,10 @@ from requests.auth import HTTPBasicAuth
 API_BASE = "https://api.komoot.de"
 SIGNIN_URL = API_BASE + "/v006/account/email/{email}/"
 UPLOAD_URL = API_BASE + "/v007/tours/"
+TOURS_URL = API_BASE + "/v007/users/{user_id}/tours/"
+
+# Public web page for a tour id (handy for the duplicate report).
+TOUR_WEB_URL = "https://www.komoot.com/tour/{tour_id}"
 
 # Common komoot sport identifiers (not exhaustive). See README.
 SPORTS = (
@@ -92,7 +96,7 @@ class KomootClient:
         self.token = token
         self.username = None
         self.session = requests.Session()
-        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.5"
+        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.6"
         # When a token is supplied we can authenticate directly.
         self.auth = HTTPBasicAuth(email, token) if token else None
 
@@ -155,6 +159,48 @@ class KomootClient:
         raise KomootError(
             "Upload failed (HTTP {}): {}".format(resp.status_code, resp.text[:300])
         )
+
+    def list_tours(self, tour_type="tour_recorded", page_size=50):
+        """Yield the account's tours (default: recorded activities) as raw dicts.
+
+        Paginates komoot's HAL+JSON tour list at
+        `GET /v007/users/{user_id}/tours/`. Requires a prior sign-in for the
+        numeric user id and token auth. Undocumented and brittle like the rest
+        of this module — kept here so a break is a one-file fix.
+        """
+        if self.auth is None or not self.username:
+            self.signin()
+        if not self.username:
+            raise KomootError("No komoot user id available; sign in first.")
+
+        url = TOURS_URL.format(user_id=quote(str(self.username), safe=""))
+        page = 0
+        while True:
+            params = {"type": tour_type, "sort_field": "date",
+                      "sort_direction": "desc", "page": page, "limit": page_size}
+            resp = self.session.get(url, params=params, auth=self.auth)
+            if resp.status_code in (401, 403):
+                raise KomootAuthError("Not authorized to list tours (session expired?).")
+            resp.raise_for_status()
+            body = resp.json()
+
+            embedded = body.get("_embedded") or {}
+            # The recorded-tours list nests tours under "tours"; be lenient about
+            # the exact key in case komoot returns "items" on some accounts.
+            tours = embedded.get("tours") or embedded.get("items") or []
+            for tour in tours:
+                yield tour
+
+            if not tours:
+                break
+            page_info = body.get("page") or {}
+            total_pages = page_info.get("totalPages")
+            if total_pages is not None:
+                if page + 1 >= total_pages:
+                    break
+            elif not (body.get("_links") or {}).get("next"):
+                break
+            page += 1
 
 
 def _tour_id(resp):
