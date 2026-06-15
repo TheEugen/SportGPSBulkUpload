@@ -28,6 +28,7 @@ from .gpx import read_metadata
 from .state import UploadState, file_hash, activity_key
 from .logfile import RunLog, DEFAULT_LOG_FILE
 from .dedupe import parse_tour, find_duplicate_groups, format_groups
+from .backup import backup_tour, BackupError
 
 # Format choices for the dropdown: "all" plus each supported extension.
 FORMAT_CHOICES = ("all",) + tuple(DATA_TYPES)
@@ -47,6 +48,10 @@ class KomootUploaderGUI:
         self.username = None
         self.events = queue.Queue()  # worker -> main-thread messages
         self.uploading = False
+
+        # Duplicate-deletion options.
+        self.backup_dir = "komoot_tour_backups"
+        self.backup_var = tk.BooleanVar(value=True)  # back up before deleting
 
         root.title("Sport GPS Bulk Upload to komoot")
         root.minsize(560, 460)
@@ -301,7 +306,12 @@ class KomootUploaderGUI:
 
         ttk.Label(inner, foreground="#cf222e",
                   text="Deleting a tour is permanent. Keep at least one tour "
-                       "per group.").pack(anchor="w", padx=10, pady=(10, 4))
+                       "per group.").pack(anchor="w", padx=10, pady=(10, 2))
+        ttk.Checkbutton(
+            inner, variable=self.backup_var,
+            text="Back up each tour to a local GPX (in {}) before deleting".format(
+                os.path.abspath(self.backup_dir))).pack(anchor="w", padx=10,
+                                                         pady=(0, 6))
 
         for n, group in enumerate(groups, 1):
             ttk.Label(inner, text="Group {} — {} tours".format(n, len(group)),
@@ -324,12 +334,17 @@ class KomootUploaderGUI:
                     tour.id, tour.name or "")):
             return
         btn.configure(state="disabled", text="Deleting…")
+        backup = self.backup_var.get()
 
         def work():
             try:
+                if backup:
+                    path = backup_tour(self.client, tour.id, self.backup_dir)
+                    self.events.put(("log", "Backed up tour {} -> {}".format(
+                        tour.id, path)))
                 self.client.delete_tour(tour.id)
                 self.events.put(("delete_ok", tour.id, btn))
-            except Exception as e:  # KomootError / network
+            except Exception as e:  # KomootError / BackupError / network
                 self.events.put(("delete_err", tour.id, str(e), btn))
 
         threading.Thread(target=work, daemon=True).start()
@@ -442,6 +457,8 @@ class KomootUploaderGUI:
                     self._log("Duplicate search failed: {}".format(event[1]))
                     self.progress_var.set("Idle")
                     self._set_busy(False)
+                elif kind == "log":
+                    self._log(event[1])
                 elif kind == "delete_ok":
                     _, tid, btn = event
                     btn.configure(text="Deleted", state="disabled")

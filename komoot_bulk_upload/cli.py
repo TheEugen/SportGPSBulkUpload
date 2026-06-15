@@ -18,6 +18,7 @@ from .gpx import read_metadata
 from .state import UploadState, file_hash, activity_key
 from .logfile import RunLog, DEFAULT_LOG_FILE
 from .dedupe import parse_tour, find_duplicate_groups, format_groups
+from .backup import backup_tour, BackupError
 
 # File extensions we can upload (matches api.DATA_TYPES keys).
 SUPPORTED_EXTS = tuple("." + ext for ext in DATA_TYPES)
@@ -62,6 +63,11 @@ def build_parser():
         "--dump-tours", metavar="PATH",
         help="With --find-duplicates, write a CSV table of every fetched tour "
              "(id/date/distance/duration/sport) for diagnosing matches.",
+    )
+    p.add_argument(
+        "--backup-dir", metavar="DIR",
+        help="With --delete-duplicates, save each tour as a local GPX in DIR "
+             "before deleting it (a tour whose backup fails is not deleted).",
     )
     p.add_argument("--email", help="komoot account email.")
     p.add_argument("--password", help="komoot password (prefer the prompt/env var).")
@@ -209,7 +215,7 @@ def find_duplicates_command(args):
         if not sys.stdin.isatty():
             emit("--delete-duplicates needs an interactive terminal; skipping deletion.")
         else:
-            _delete_duplicates_interactive(client, groups, emit)
+            _delete_duplicates_interactive(client, groups, emit, args.backup_dir)
 
     if log.active:
         print("Report written to {}".format(os.path.abspath(args.log_file)))
@@ -253,13 +259,19 @@ def _parse_delete_selection(text, group):
     return ids
 
 
-def _delete_duplicates_interactive(client, groups, emit):
+def _delete_duplicates_interactive(client, groups, emit, backup_dir=None):
     """Walk each duplicate group and delete only what the user confirms.
 
     Nothing is removed without an explicit 'y' confirmation; 'q' stops early.
+    When `backup_dir` is set, each tour is saved as a local GPX first, and a
+    tour whose backup fails is NOT deleted.
     """
     print("\nInteractive deletion — pick tours to remove from each group.")
-    print("Deletions are permanent and confirmed one group at a time.\n")
+    print("Deletions are permanent and confirmed one group at a time.")
+    if backup_dir:
+        print("Each tour is backed up to {} before deletion.".format(
+            os.path.abspath(backup_dir)))
+    print()
     deleted = 0
     for n, group in enumerate(groups, 1):
         print("Group {} of {}:".format(n, len(groups)))
@@ -279,6 +291,13 @@ def _delete_duplicates_interactive(client, groups, emit):
             print("  Skipped.\n")
             continue
         for tid in ids:
+            if backup_dir:
+                try:
+                    path = backup_tour(client, tid, backup_dir)
+                    emit("  backed up tour {} -> {}".format(tid, path))
+                except (KomootError, BackupError, OSError) as e:
+                    emit("  SKIPPED tour {} (backup failed: {})".format(tid, e))
+                    continue
             try:
                 client.delete_tour(tid)
                 deleted += 1

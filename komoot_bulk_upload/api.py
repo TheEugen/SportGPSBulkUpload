@@ -97,7 +97,7 @@ class KomootClient:
         self.token = token
         self.username = None
         self.session = requests.Session()
-        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.8"
+        self.session.headers["User-Agent"] = user_agent or "SportGPSBulkUpload/1.9"
         # When a token is supplied we can authenticate directly.
         self.auth = HTTPBasicAuth(email, token) if token else None
 
@@ -202,6 +202,25 @@ class KomootClient:
             elif not (body.get("_links") or {}).get("next"):
                 break
             page += 1
+
+    def get_tour(self, tour_id, embedded="coordinates"):
+        """Fetch one tour via `GET /v007/tours/{id}` (with embedded track data).
+
+        Returns the raw tour dict (its `_embedded.coordinates.items` hold the
+        lat/lng/alt/time points). Used to back a tour up locally before deleting.
+        """
+        if self.auth is None:
+            self.signin()
+        url = TOUR_URL.format(tour_id=quote(str(tour_id), safe=""))
+        params = {"_embedded": embedded} if embedded else None
+        resp = self.session.get(url, params=params, auth=self.auth)
+        if resp.status_code in (401, 403):
+            raise KomootAuthError(
+                "Not authorized to read tour {} (session expired?).".format(tour_id))
+        if resp.status_code == 404:
+            raise KomootError("Tour {} not found.".format(tour_id))
+        resp.raise_for_status()
+        return resp.json()
 
     def delete_tour(self, tour_id):
         """Delete one tour by id via `DELETE /v007/tours/{tour_id}`.

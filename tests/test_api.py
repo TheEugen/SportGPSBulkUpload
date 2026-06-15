@@ -175,6 +175,29 @@ class ListToursTests(unittest.TestCase):
             list(c.list_tours())
 
 
+class GetTourTests(unittest.TestCase):
+    def test_returns_tour_json_and_requests_coordinates(self):
+        c = make_client()
+        c.session.get_handler = lambda page: FakeResponse(200, {"id": 7})
+        self.assertEqual(c.get_tour(7), {"id": 7})
+        _, url, kwargs = c.session.calls[0]
+        self.assertIn("/tours/7", url)
+        self.assertEqual(kwargs["params"], {"_embedded": "coordinates"})
+
+    def test_404_raises_komoot_error(self):
+        c = make_client()
+        c.session.get_handler = lambda page: FakeResponse(404)
+        with self.assertRaises(KomootError):
+            c.get_tour(7)
+
+    def test_auth_codes_raise_auth_error(self):
+        for code in (401, 403):
+            c = make_client()
+            c.session.get_handler = lambda page, code=code: FakeResponse(code)
+            with self.assertRaises(KomootAuthError):
+                c.get_tour(7)
+
+
 class DeleteTourTests(unittest.TestCase):
     def test_success_codes_return_true(self):
         for code in (200, 204):
