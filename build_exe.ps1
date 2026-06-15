@@ -13,8 +13,12 @@
 
 $ErrorActionPreference = "Stop"
 
+# Use the `py` launcher locally (this machine has only `py`), but fall back to
+# `python` where there is no launcher (e.g. GitHub Actions' setup-python).
+$Py = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
+
 # Console build: CLI needs a terminal for the credential prompts; also serves --gui.
-py -m PyInstaller `
+& $Py -m PyInstaller `
     --onefile `
     --name SportGPSBulkUpload `
     --hidden-import komoot_bulk_upload.gui `
@@ -28,7 +32,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Windowed GUI-only build: no console window when double-clicked.
-py -m PyInstaller `
+& $Py -m PyInstaller `
     --onefile `
     --windowed `
     --name SportGPSBulkUpload-GUI `
