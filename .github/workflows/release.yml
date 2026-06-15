@@ -1,0 +1,70 @@
+name: Release
+
+# Tag-driven release: push a tag like `v1.9.1` to build the Windows executables
+# and publish them as a GitHub Release. The tag must match __version__.
+#
+#     git tag v1.9.1 && git push origin v1.9.1
+#
+# Windows runner is required — PyInstaller cannot cross-compile a Windows .exe.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # needed to create the release and upload assets
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests
+
+  build:
+    needs: test  # never ship an .exe that fails the tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check tag matches __version__
+        shell: pwsh
+        run: |
+          $ver = (python -c "import komoot_bulk_upload as m; print(m.__version__)").Trim()
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($ver -ne $tag) {
+            Write-Error "Tag '$tag' does not match __version__ '$ver'. Bump one to match."
+            exit 1
+          }
+          Write-Host "Version OK: $ver"
+
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build executables
+        run: ./build_exe.ps1
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            ### Downloads
+            - `SportGPSBulkUpload.exe` — console build (full CLI, plus `--gui`).
+            - `SportGPSBulkUpload-GUI.exe` — double-click to open the GUI (no console).
+
+            > **⚠️ Unsigned executables.** These `.exe` files are not code-signed, so
+            > Windows SmartScreen or some antivirus may warn on first run. If you trust
+            > the source, choose **More info → Run anyway**. You can also run from source
+            > with `py -m komoot_bulk_upload` instead.

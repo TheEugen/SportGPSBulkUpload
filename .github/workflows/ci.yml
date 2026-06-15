@@ -1,0 +1,47 @@
+name: CI
+
+# Run the offline test suite on every push to main and on PRs. The package is
+# pure-Python (only `requests`) and the tests mock komoot's network, so no
+# secrets or live calls are needed. The Python matrix verifies the "3.8+" claim.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile check (syntax on this Python)
+        run: python -m compileall komoot_bulk_upload tests
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Smoke check (--version)
+        run: python -m komoot_bulk_upload --version
+
+      - name: Smoke check (--help)
+        run: python -m komoot_bulk_upload --help
