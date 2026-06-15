@@ -46,6 +46,14 @@ class ParseTourTests(unittest.TestCase):
         self.assertEqual(parse_tour(raw_tour(3, None, source="sigma")).source,
                          "other")
 
+    def test_import_with_recorded_type_is_not_mislabelled(self):
+        # Regression: every list tour is type=tour_recorded; an import's source
+        # dict carries that too, so classification must read the api path only
+        # (else all tours look 'recorded' and nothing pairs -> 0 duplicates).
+        imp = parse_tour(raw_tour(1, None, source={
+            "api": "de.komoot.main-api/tour/import", "type": "tour_recorded"}))
+        self.assertEqual(imp.source, "import")
+
 
 class ParseDateTests(unittest.TestCase):
     def test_handles_z_offset_fractional_and_naive(self):
@@ -125,8 +133,10 @@ class FindDuplicateGroupsTests(unittest.TestCase):
         self.assertEqual([g[0].id for g in groups], [3, 1])
 
 
-REC = {"api": "de.komoot.main-api/tour/recorded"}
-IMP = {"api": "de.komoot.main-api/tour/import"}
+# Mirror the real komoot list response: every tour is type=tour_recorded, and
+# only the source api path distinguishes an app recording from a file import.
+REC = {"api": "de.komoot.main-api/tour/recorded", "type": "tour_recorded"}
+IMP = {"api": "de.komoot.main-api/tour/import", "type": "tour_recorded"}
 
 
 class CrossSourceMatchingTests(unittest.TestCase):
