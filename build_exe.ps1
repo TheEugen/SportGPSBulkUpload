@@ -11,11 +11,21 @@
 # Usage:
 #     .\build_exe.ps1
 
+param(
+    # Python interpreter to build with. Defaults to the `py` launcher locally
+    # (this machine has only `py`). CI must pass `-Python python` so the build
+    # uses setup-python's interpreter — the one PyInstaller was installed into.
+    # (On the runner the `py` launcher exists too but points at a different,
+    # newer Python without PyInstaller, which is what broke the first release.)
+    [string]$Python = ""
+)
+
 $ErrorActionPreference = "Stop"
 
-# Use the `py` launcher locally (this machine has only `py`), but fall back to
-# `python` where there is no launcher (e.g. GitHub Actions' setup-python).
-$Py = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
+if (-not $Python) {
+    $Python = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
+}
+$Py = $Python
 
 # Console build: CLI needs a terminal for the credential prompts; also serves --gui.
 & $Py -m PyInstaller `
