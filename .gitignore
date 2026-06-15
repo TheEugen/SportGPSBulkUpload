@@ -13,6 +13,9 @@ komoot_upload_state.json
 komoot_upload_log.txt
 *.json.tmp
 
+# Local GPX backups of tours saved before deletion (private track data)
+komoot_tour_backups/
+
 # Local Claude Code settings (machine-specific)
 .claude/settings.local.json
 
