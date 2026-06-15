@@ -1,5 +1,8 @@
 # Sport GPS Bulk Upload to komoot
 
+[![CI](https://github.com/TheEugen/SportGPSBulkUpload/actions/workflows/ci.yml/badge.svg)](https://github.com/TheEugen/SportGPSBulkUpload/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/TheEugen/SportGPSBulkUpload?sort=semver)](https://github.com/TheEugen/SportGPSBulkUpload/releases/latest)
+
 Upload many `.gpx` or `.tcx` activities (e.g. exported from SIGMA DATA CENTER
 5.9.1) to a komoot account in one go. komoot's website only accepts one activity
 at a time; this tool drives komoot's **undocumented internal API** to upload a
@@ -9,6 +12,21 @@ not yet supported — use the GPX or TCX export for those.
 > ⚠️ The komoot endpoints used here are unofficial and may change or break without
 > notice. Uploads default to **private** and the run is **resumable**, so you can
 > safely re-run after an interruption without creating duplicates.
+
+## Download
+
+Pre-built Windows executables (no Python install needed) are attached to each
+release — grab the latest from the
+[**Releases page**](https://github.com/TheEugen/SportGPSBulkUpload/releases/latest):
+
+| File | Use |
+| --- | --- |
+| `SportGPSBulkUpload.exe` | Console build — the full CLI (and `--gui`). |
+| `SportGPSBulkUpload-GUI.exe` | Double-click to open the GUI (no console window). |
+
+> The executables are **unsigned**, so Windows SmartScreen or some antivirus may
+> warn on first run. If you trust the source, choose **More info → Run anyway** —
+> or run from source (below) instead.
 
 ## Install
 
