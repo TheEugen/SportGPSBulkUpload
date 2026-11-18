@@ -122,3 +122,12 @@ Elapsed time is read from GPX/TCX timestamps. `.fit` is recognized but currently
 fails fast with a clear message (planned, see TASKS.md).
 
 Recommended first run: `--dry-run`, then a single file, then the full batch.
+
+## License
+
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+You may use, modify and share this code for noncommercial purposes (personal use, hobby projects, research, education).
+**Commercial use requires a separate license.** Contact: fehandke@gmail.com
+
+Text and data mining for commercial purposes, including using this code to train AI models, is expressly reserved
+(§ 44b UrhG, Art. 4(3) Directive (EU) 2019/790).
